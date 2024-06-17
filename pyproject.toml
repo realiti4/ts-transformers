@@ -1,0 +1,35 @@
+[tool.poetry]
+name = "chronos-ts"
+version = "0.1.0"
+description = ""
+authors = ["Onur Cetinkol <onurcetinkol@gmail.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+numpy = "^1.26.4"
+pandas = "^2.2.2"
+torch = {version = "^2.3+cu121", source = "pytorch-gpu-source"}
+torchvision = {version = "^0.18+cu121", source = "pytorch-gpu-source"}
+torchaudio = {version = "^2.3+cu121", source = "pytorch-gpu-source"}
+transformers = "*"
+matplotlib = "*"
+datasets = "*"
+
+[[tool.poetry.source]]
+name = "pytorch-cpu-source"
+url = "https://download.pytorch.org/whl/cpu"
+priority = "explicit"
+
+[[tool.poetry.source]]
+name = "pytorch-gpu-source"
+url = "https://download.pytorch.org/whl/cu121"
+priority = "explicit"
+
+[tool.ruff]
+line-length = 120
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -14,9 +14,10 @@ from pathlib import Path
 from functools import partial
 from typing import List, Iterator, Optional, Dict
 
-import typer
-from typer_config import use_yaml_config
+# import typer
+# from typer_config import use_yaml_config
 import numpy as np
+import pandas as pd
 import torch
 import torch.distributed as dist
 from torch.utils.data import IterableDataset, get_worker_info
@@ -41,12 +42,18 @@ from gluonts.transform import (
     ExpectedNumInstanceSampler,
 )
 
-from chronos import ChronosConfig, ChronosTokenizer
+from model.chronos import ChronosConfig, ChronosTokenizer
 
 from utils import yaml_loader
 
+# torch.set_float32_matmul_precision("high")
 
 # app = typer.Typer(pretty_exceptions_enable=False)
+
+df = pd.read_csv("datasets/merged8.csv")
+df = df['close'].to_numpy()[:2000]
+
+# print('done')
 
 
 def is_main_process() -> bool:
@@ -79,18 +86,12 @@ def get_training_job_info() -> Dict:
         job_info["device_count"] = torch.cuda.device_count()
         print(job_info)
 
-        job_info["device_names"] = {
-            idx: torch.cuda.get_device_name(idx)
-            for idx in range(torch.cuda.device_count())
-        }
+        job_info["device_names"] = {idx: torch.cuda.get_device_name(idx) for idx in range(torch.cuda.device_count())}
         print(job_info)
 
         print(torch.cuda.mem_get_info(device=0))
         # print(torch.cuda.mem_get_info(device=1))
-        job_info["mem_info"] = {
-            idx: torch.cuda.mem_get_info(device=idx)
-            for idx in range(torch.cuda.device_count())
-        }
+        job_info["mem_info"] = {idx: torch.cuda.mem_get_info(device=idx) for idx in range(torch.cuda.device_count())}
         print(job_info)
 
     # DDP info
@@ -146,14 +147,10 @@ def get_next_path(
             lambda x: re.match(f"^{base_fname}{separator}\\d+$", x.stem),
             base_dir.glob(f"*.{file_type}"),
         )
-    run_nums = list(
-        map(lambda x: int(x.stem.replace(base_fname + separator, "")), items)
-    ) + [-1]
+    run_nums = list(map(lambda x: int(x.stem.replace(base_fname + separator, "")), items)) + [-1]
 
     next_num = max(run_nums) + 1
-    fname = f"{base_fname}{separator}{next_num}" + (
-        f".{file_type}" if file_type != "" else ""
-    )
+    fname = f"{base_fname}{separator}{next_num}" + (f".{file_type}" if file_type != "" else "")
 
     return base_dir / fname
 
@@ -175,9 +172,7 @@ def load_model(
     of tokens.
     """
     assert model_type in ["seq2seq", "causal"]
-    AutoModelClass = (
-        AutoModelForSeq2SeqLM if model_type == "seq2seq" else AutoModelForCausalLM
-    )
+    AutoModelClass = AutoModelForSeq2SeqLM if model_type == "seq2seq" else AutoModelForCausalLM
     if random_init:
         log_on_main("Using random initialization", logger)
         config = AutoConfig.from_pretrained(model_id)
@@ -198,9 +193,7 @@ def load_model(
     return model
 
 
-def has_enough_observations(
-    entry: dict, min_length: int = 0, max_missing_prop: float = 1.0
-) -> bool:
+def has_enough_observations(entry: dict, min_length: int = 0, max_missing_prop: float = 1.0) -> bool:
     """
     Check if the given entry has enough observations in the ``"target"`` attribute.
 
@@ -214,10 +207,7 @@ def has_enough_observations(
         The maximum proportion of missing data allowed in the ``"target"``
         attribute.
     """
-    if (
-        len(entry["target"]) >= min_length
-        and np.isnan(entry["target"]).mean() <= max_missing_prop
-    ):
+    if len(entry["target"]) >= min_length and np.isnan(entry["target"]).mean() <= max_missing_prop:
         return True
     return False
 
@@ -247,9 +237,7 @@ class PseudoShuffledIterableDataset(IterableDataset):
         for element in self.base_dataset:
             shuffle_buffer.append(element)
             if len(shuffle_buffer) >= self.shuffle_buffer_length:
-                idx = torch.randint(
-                    len(shuffle_buffer), size=(), generator=self.generator
-                )
+                idx = torch.randint(len(shuffle_buffer), size=(), generator=self.generator)
                 yield shuffle_buffer.pop(idx)
 
         while shuffle_buffer:
@@ -333,12 +321,11 @@ class ChronosDataset(IterableDataset, ShuffleMixin):
         entry["target"] = np.asarray(entry["target"], dtype=self.np_dtype)
         assert entry["target"].ndim == 1, f"got {entry['target'].ndim=}, expected 1"
 
+        # Drop random observations
         if mode == "training" and self.drop_prob > 0:
             target = entry["target"].copy()
             drop_p = np.random.uniform(low=0.0, high=self.drop_prob)
-            mask = np.random.choice(
-                [True, False], size=len(target), p=[drop_p, 1 - drop_p]
-            )
+            mask = np.random.choice([True, False], size=len(target), p=[drop_p, 1 - drop_p])
             target[mask] = np.nan
             entry["target"] = target
 
@@ -371,9 +358,7 @@ class ChronosDataset(IterableDataset, ShuffleMixin):
 
     def create_training_data(self, data):
         data = Cyclic(data)
-        split_transform = self._create_instance_splitter(
-            "training"
-        ) + FilterTransformation(
+        split_transform = self._create_instance_splitter("training") + FilterTransformation(
             condition=lambda entry: (~np.isnan(entry["past_target"])).sum() > 0
         )
         data = split_transform.apply(data, is_train=True)
@@ -389,9 +374,7 @@ class ChronosDataset(IterableDataset, ShuffleMixin):
 
     def to_hf_format(self, entry: dict) -> dict:
         past_target = torch.tensor(entry["past_target"]).unsqueeze(0)
-        input_ids, attention_mask, scale = self.tokenizer.context_input_transform(
-            past_target
-        )
+        input_ids, attention_mask, scale = self.tokenizer.context_input_transform(past_target)
         future_target = torch.tensor(entry["future_target"]).unsqueeze(0)
         labels, labels_mask = self.tokenizer.label_input_transform(future_target, scale)
         labels[labels_mask == 0] = -100
@@ -411,18 +394,11 @@ class ChronosDataset(IterableDataset, ShuffleMixin):
         ]
 
         if self.mode == "training":
-            iterables = [
-                self.create_training_data(dataset) for dataset in preprocessed_datasets
-            ]
+            iterables = [self.create_training_data(dataset) for dataset in preprocessed_datasets]
         elif self.mode == "test":
-            iterables = [
-                self.create_test_data(dataset) for dataset in preprocessed_datasets
-            ]
+            iterables = [self.create_test_data(dataset) for dataset in preprocessed_datasets]
         else:
-            iterables = [
-                self.create_validation_data(dataset)
-                for dataset in preprocessed_datasets
-            ]
+            iterables = [self.create_validation_data(dataset) for dataset in preprocessed_datasets]
 
         worker_info = get_worker_info()
         if worker_info is None:
@@ -431,9 +407,7 @@ class ChronosDataset(IterableDataset, ShuffleMixin):
             worker_id = worker_info.id
             num_workers = worker_info.num_workers
             iterables = list(itertools.islice(iterables, worker_id, None, num_workers))
-            probs = list(
-                itertools.islice(self.probabilities, worker_id, None, num_workers)
-            )
+            probs = list(itertools.islice(self.probabilities, worker_id, None, num_workers))
 
         probs = [prob / sum(probs) for prob in probs]
 
@@ -493,15 +467,12 @@ def main(
     top_p: float = 1.0,
     seed: Optional[int] = None,
 ):
-    if tf32 and not (
-        torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8
-    ):
+    if tf32 and not (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8):
         # TF32 floating point format is available only on NVIDIA GPUs
         # with compute capability 8 and above. See link for details.
         # https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#compute-capability-8-x
         log_on_main(
-            "TF32 format is only available on devices with compute capability >= 8. "
-            "Setting tf32 to False.",
+            "TF32 format is only available on devices with compute capability >= 8. " "Setting tf32 to False.",
             logger,
         )
         tf32 = False
@@ -538,8 +509,7 @@ def main(
 
     log_on_main(f"Logging dir: {output_dir}", logger)
     log_on_main(
-        f"Loading and filtering {len(training_data_paths)} datasets "
-        f"for training: {training_data_paths}",
+        f"Loading and filtering {len(training_data_paths)} datasets " f"for training: {training_data_paths}",
         logger,
     )
 
@@ -549,7 +519,9 @@ def main(
     )
 
     # Dev
-    test = FileDataset(path=Path(training_data_paths[0]), freq="h")
+    
+
+    # test = FileDataset(path=Path(training_data_paths[0]), freq="h")
     print("he")
 
     train_datasets = [
@@ -564,19 +536,19 @@ def main(
         for data_path in training_data_paths
     ]
 
-    eval_data_paths = ['bitcoin_eval.arrow']
+    # eval_data_paths = ['bitcoin_eval.arrow']
 
-    eval_datasets = [
-        Filter(
-            partial(
-                has_enough_observations,
-                min_length=min_past + prediction_length,
-                max_missing_prop=max_missing_prop,
-            ),
-            FileDataset(path=Path(data_path), freq="h"),
-        )
-        for data_path in eval_data_paths
-    ]
+    # eval_datasets = [
+    #     Filter(
+    #         partial(
+    #             has_enough_observations,
+    #             min_length=min_past + prediction_length,
+    #             max_missing_prop=max_missing_prop,
+    #         ),
+    #         FileDataset(path=Path(data_path), freq="h"),
+    #     )
+    #     for data_path in eval_data_paths
+    # ]
 
     log_on_main("Initializing model", logger)
 
@@ -620,17 +592,6 @@ def main(
         mode="training",
     ).shuffle(shuffle_buffer_length=shuffle_buffer_length)
 
-    # Dev - validations
-    shuffled_eval_dataset = ChronosDataset(
-        datasets=eval_datasets,
-        probabilities=probability,
-        tokenizer=chronos_config.create_tokenizer(),
-        context_length=context_length,
-        prediction_length=prediction_length,
-        min_past=min_past,
-        mode="validation",
-    ).shuffle(shuffle_buffer_length=shuffle_buffer_length)
-
     # Define training args
     training_args = TrainingArguments(
         output_dir=str(output_dir),
@@ -652,8 +613,8 @@ def main(
         torch_compile=torch_compile,
         ddp_find_unused_parameters=False,
         remove_unused_columns=False,
-        evaluation_strategy='steps',
-        eval_steps=100
+        # evaluation_strategy='steps',
+        # eval_steps=100
     )
 
     # Create Trainer instance
@@ -661,7 +622,7 @@ def main(
         model=model,
         args=training_args,
         train_dataset=shuffled_train_dataset,
-        eval_dataset=shuffled_eval_dataset
+        # eval_dataset=shuffled_eval_dataset
     )
     log_on_main("Training", logger)
 
@@ -669,9 +630,7 @@ def main(
 
     if is_main_process():
         model.save_pretrained(output_dir / "checkpoint-final")
-        save_training_info(
-            output_dir / "checkpoint-final", training_config=raw_training_config
-        )
+        save_training_info(output_dir / "checkpoint-final", training_config=raw_training_config)
 
 
 if __name__ == "__main__":
@@ -685,6 +644,16 @@ if __name__ == "__main__":
 
     conf = yaml_loader(conf_path)
 
+    # total_batch_size = 256
+    total_batch_size = 64
+    mini_batch = 8
+    ddp_world_size = 1
+    grad_accum_steps = total_batch_size // (mini_batch * ddp_world_size)
+
+    assert (
+        total_batch_size % (mini_batch * ddp_world_size) == 0
+    ), "make sure total_batch_size is divisible by B * T * ddp_world_size"
+
     user_conf = {
         "training_data_paths": ["bitcoin.arrow"],
         "probability": [1.0],
@@ -695,9 +664,10 @@ if __name__ == "__main__":
         # "save_steps": 2000,
         "learning_rate": 0.0001,
         "random_init": False,  # enable fine-tuning
-        "per_device_train_batch_size": 12,
-        "gradient_accumulation_steps": 1,
-        "context_length": 768
+        "per_device_train_batch_size": mini_batch,
+        "gradient_accumulation_steps": grad_accum_steps,
+        "context_length": 768,
+        "torch_compile": False
     }
 
     # # Large model optimizations

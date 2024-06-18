@@ -536,19 +536,19 @@ def main(
         for data_path in training_data_paths
     ]
 
-    # eval_data_paths = ['bitcoin_eval.arrow']
+    eval_data_paths = ['datasets/bitcoin_eval.arrow']
 
-    # eval_datasets = [
-    #     Filter(
-    #         partial(
-    #             has_enough_observations,
-    #             min_length=min_past + prediction_length,
-    #             max_missing_prop=max_missing_prop,
-    #         ),
-    #         FileDataset(path=Path(data_path), freq="h"),
-    #     )
-    #     for data_path in eval_data_paths
-    # ]
+    eval_datasets = [
+        Filter(
+            partial(
+                has_enough_observations,
+                min_length=min_past + prediction_length,
+                max_missing_prop=max_missing_prop,
+            ),
+            FileDataset(path=Path(data_path), freq="h"),
+        )
+        for data_path in eval_data_paths
+    ]
 
     log_on_main("Initializing model", logger)
 
@@ -582,6 +582,7 @@ def main(
     # Add extra items to model config so that it's saved in the ckpt
     model.config.chronos_config = chronos_config.__dict__
 
+    # Train dataset
     shuffled_train_dataset = ChronosDataset(
         datasets=train_datasets,
         probabilities=probability,
@@ -590,6 +591,17 @@ def main(
         prediction_length=prediction_length,
         min_past=min_past,
         mode="training",
+    ).shuffle(shuffle_buffer_length=shuffle_buffer_length)
+
+    # Eval dataset
+    shuffled_eval_dataset = ChronosDataset(
+        datasets=eval_datasets,
+        probabilities=probability,
+        tokenizer=chronos_config.create_tokenizer(),
+        context_length=context_length,
+        prediction_length=prediction_length,
+        min_past=min_past,
+        mode="validation",
     ).shuffle(shuffle_buffer_length=shuffle_buffer_length)
 
     # Define training args
@@ -610,11 +622,12 @@ def main(
         gradient_accumulation_steps=gradient_accumulation_steps,
         dataloader_num_workers=dataloader_num_workers,
         tf32=tf32,  # remove this if not using Ampere GPUs (e.g., A100)
+        bf16=True,
         torch_compile=torch_compile,
         ddp_find_unused_parameters=False,
         remove_unused_columns=False,
-        # evaluation_strategy='steps',
-        # eval_steps=100
+        eval_strategy='steps',
+        eval_steps=250
     )
 
     # Create Trainer instance
@@ -622,7 +635,7 @@ def main(
         model=model,
         args=training_args,
         train_dataset=shuffled_train_dataset,
-        # eval_dataset=shuffled_eval_dataset
+        eval_dataset=shuffled_eval_dataset
     )
     log_on_main("Training", logger)
 
@@ -645,29 +658,33 @@ if __name__ == "__main__":
     conf = yaml_loader(conf_path)
 
     # total_batch_size = 256
-    total_batch_size = 64
-    mini_batch = 8
+    total_batch_size = 32
+    mini_batch = 16
     ddp_world_size = 1
     grad_accum_steps = total_batch_size // (mini_batch * ddp_world_size)
+    lr = 1e-5
 
     assert (
         total_batch_size % (mini_batch * ddp_world_size) == 0
     ), "make sure total_batch_size is divisible by B * T * ddp_world_size"
+    print(f"total desired batch size: {total_batch_size}")
+    print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
 
     user_conf = {
-        "training_data_paths": ["bitcoin.arrow"],
+        "training_data_paths": ["datasets/bitcoin_train.arrow"],
         "probability": [1.0],
         "model_id": f"amazon/{model_name}",
         "output_dir": "./output/",
         "max_steps": 10000,
         "log_steps": 100,
-        # "save_steps": 2000,
-        "learning_rate": 0.0001,
+        "save_steps": 1000,
+        "learning_rate": lr,
         "random_init": False,  # enable fine-tuning
         "per_device_train_batch_size": mini_batch,
         "gradient_accumulation_steps": grad_accum_steps,
-        "context_length": 768,
-        "torch_compile": False
+        # "context_length": 768,
+        "torch_compile": True,
+        "seed": 1337
     }
 
     # # Large model optimizations

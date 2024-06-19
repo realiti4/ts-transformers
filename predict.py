@@ -2,16 +2,16 @@ import pandas as pd  # requires: pip install pandas
 import torch
 import transformers
 
-from chronos import ChronosPipeline
+from model.chronos import ChronosPipeline
 
 import matplotlib.pyplot as plt  # requires: pip install matplotlib
 import numpy as np
 
-transformers.set_seed(4)
+transformers.set_seed(1337)
 
 pipeline = ChronosPipeline.from_pretrained(
     # "amazon/chronos-t5-base",
-    "output/run-4/checkpoint-final",
+    "output/run-7/checkpoint-2000",
     device_map="cuda",  # use "cpu" for CPU inference and "mps" for Apple Silicon
     torch_dtype=torch.bfloat16,
 )
@@ -19,22 +19,35 @@ pipeline = ChronosPipeline.from_pretrained(
 # Params
 prediction_length = 64
 
-df = pd.read_csv("https://raw.githubusercontent.com/AileenNielsen/TimeSeriesAnalysisWithPython/master/data/AirPassengers.csv")
-context = torch.tensor(df["#Passengers"])
-real_target = None
+# df = pd.read_csv(
+#     "https://raw.githubusercontent.com/AileenNielsen/TimeSeriesAnalysisWithPython/master/data/AirPassengers.csv"
+# )
+# context = torch.tensor(df["#Passengers"])
+# real_target = None
 
 
 # Dev
-df = pd.read_csv('datasets/merged8.csv')
+df = pd.read_csv("datasets/merged8.csv")
 
-window_index = 10000
-context_length = 768
+window_index = 87000
+context_length = 512
 
-raw_data = df['close'].to_numpy()
-real_target = raw_data[-window_index:-window_index + prediction_length]
-context = torch.tensor(raw_data[-(window_index + context_length):-window_index])
+raw_data = df["close"].to_numpy()
+real_target = raw_data[window_index + context_length : window_index + context_length + prediction_length]
+context = torch.tensor(raw_data[window_index : window_index + context_length])
 
-print('de')
+print("de")
+tokens, attention_mask, scale = pipeline.tokenizer.context_input_transform(context.unsqueeze(0))
+
+model2 = pipeline.model.model
+model2.eval()
+result = model2(
+    input_ids = tokens.to('cuda'),
+    decoder_input_ids = torch.zeros([1, 1], dtype=torch.long).to('cuda'),
+    # return_dict = False
+)
+
+print('hasdf')
 
 # # get encoder embeddings
 # embedding, _ = pipeline.embed(context=context)
@@ -60,6 +73,8 @@ forecast = pipeline.predict(
 # Printing
 forecast_index = range(len(context), len(context) + prediction_length)
 low, median, high = np.quantile(forecast[0].numpy(), [0.1, 0.5, 0.9], axis=0)
+
+print("Dev predictions", forecast[:, 0, :])
 
 plt.figure(figsize=(8, 4))
 plt.plot(context.numpy(), color="royalblue", label="historical data")

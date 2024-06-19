@@ -18,6 +18,7 @@ matplotlib = "*"
 datasets = "*"
 scikit-learn = "*"
 tensorboardX = "*"
+orjson = "*"
 
 [[tool.poetry.source]]
 name = "pytorch-cpu-source"

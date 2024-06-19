@@ -518,12 +518,6 @@ def main(
         logger,
     )
 
-    # Dev
-    
-
-    # test = FileDataset(path=Path(training_data_paths[0]), freq="h")
-    print("he")
-
     train_datasets = [
         Filter(
             partial(
@@ -683,7 +677,7 @@ if __name__ == "__main__":
         "per_device_train_batch_size": mini_batch,
         "gradient_accumulation_steps": grad_accum_steps,
         # "context_length": 768,
-        "torch_compile": True,
+        "torch_compile": False,
         "seed": 1337
     }
 

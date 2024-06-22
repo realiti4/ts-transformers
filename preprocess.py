@@ -16,6 +16,12 @@ random.seed(1337)
 
 
 def convert_to_feather(walk_path: str) -> None:
+    """
+    Recursively converts CSV files in 'walk_path' to Feather format.
+    
+    Args:
+        walk_path: Root directory to start conversion.
+    """
     for root, dirs, files in os.walk(walk_path):
         for file in files:
             try:
@@ -56,7 +62,9 @@ def make_windows(array, window_size, shuffle=False):
     return output
 
 
-def make_dataset(dataset: Dataset, window_size: int = 1024, split_ratio: float = 0.85) -> Tuple[list, list, dict]:
+def make_dataset(
+    dataset: Dataset, sliding_windows: bool = False, window_size: int = 1024, split_ratio: float = 0.85
+) -> Tuple[list, list, dict]:
     train_dataset = []
     eval_dataset = []
 
@@ -82,25 +90,33 @@ def make_dataset(dataset: Dataset, window_size: int = 1024, split_ratio: float =
                 train = array[: int(len(array) * ratio)]
                 eval = array[int(len(array) * ratio) :]
 
-                # train = sliding_window_view(train, window_size)
-                train = make_windows(train, window_size, shuffle=False)
-                train_dataset.extend(train)
+                # Training set
                 stats["train_points"] += len(train)
 
+                if sliding_windows:
+                    # train = sliding_window_view(train, window_size)
+                    train = make_windows(train, window_size, shuffle=False)
+
+                train_dataset.extend(train)
+
+                # Evaluation set
                 if len(eval) > window_size:
-                    # eval = sliding_window_view(eval, window_size)
-                    eval = make_windows(eval, window_size, shuffle=False)
-                    eval_dataset.extend(eval)
                     stats["eval_points"] += len(eval)
+
+                    if sliding_windows:
+                        # eval = sliding_window_view(eval, window_size)
+                        eval = make_windows(eval, window_size, shuffle=False)
+
+                    eval_dataset.extend(eval)
 
     return train_dataset, eval_dataset, stats
 
 
 def prepare_dataset():
     """
-    This is highly inefficient, but it guarantees that the long time series will be seen more evenly on training.
-    We should just store the whole array and give probability to each dataset by its length on training.
-    I will fix this after getting more comfortable with the gluonts dataset.
+    This is highly inefficient with sliding window option.
+    We use Gluonts' sampler to give small sets less probability to fix oversampling problem.
+    So no need to use sliding window here.
     """
 
     dataset_list = [
@@ -125,24 +141,8 @@ def prepare_dataset():
     print("Done")
 
 
-# convert_to_feather("stock_dataset")
-prepare_dataset()
+if __name__ == "__main__":
+    # convert_to_feather("stock_dataset")
+    prepare_dataset()
 
-
-# df = pd.read_csv("datasets/merged8.csv")
-
-# array = df["close"].to_numpy()
-# window_size = 1024
-# split_ratio = 0.85
-
-# train = array[: int(len(array) * split_ratio)]
-# eval = array[int(len(array) * split_ratio) :]
-
-
-# train_windows = sliding_window_view(train, window_size)
-# convert_to_arrow("./datasets/bitcoin_train.arrow", time_series=train_windows)
-
-# eval_windows = sliding_window_view(eval, window_size)
-# convert_to_arrow("./datasets/bitcoin_eval.arrow", time_series=eval_windows)
-
-# print("done")
+    print("done")

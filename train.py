@@ -44,7 +44,8 @@ from gluonts.transform import (
 
 from model.chronos import ChronosConfig, ChronosTokenizer
 
-from utils import yaml_loader
+from utils.utils import yaml_loader
+from utils.evaluation import custom_metric_function
 
 # torch.set_float32_matmul_precision("high")
 
@@ -334,10 +335,12 @@ class ChronosDataset(IterableDataset, ShuffleMixin):
     def _create_instance_splitter(self, mode: str):
         assert mode in ["training", "test", "validation"]
 
+        min_instances = 0   # keep this as 0 so that we can sample all data evenly across datasets
+
         instance_sampler = {
             "training": ExpectedNumInstanceSampler(
                 num_instances=1.0,
-                min_instances=1,
+                min_instances=min_instances,
                 min_past=self.min_past,
                 min_future=self.prediction_length,
             ),
@@ -629,7 +632,8 @@ def main(
         model=model,
         args=training_args,
         train_dataset=shuffled_train_dataset,
-        eval_dataset=shuffled_eval_dataset
+        eval_dataset=shuffled_eval_dataset,
+        # compute_metrics=custom_metric_function
     )
     log_on_main("Training", logger)
 
@@ -665,7 +669,7 @@ if __name__ == "__main__":
     print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
 
     user_conf = {
-        "training_data_paths": ["datasets/bitcoin_train.arrow"],
+        "training_data_paths": ["datasets/all_bitcoin.arrow"],
         "probability": [1.0],
         "model_id": f"amazon/{model_name}",
         "output_dir": "./output/",

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from numpy.lib.stride_tricks import sliding_window_view
 from matplotlib import pyplot as plt
 
-from utils import convert_to_arrow
+from utils.utils import convert_to_arrow
 
 random.seed(1337)
 

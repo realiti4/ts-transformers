@@ -1,9 +1,11 @@
+import torch.utils
 import yaml
 
 from pathlib import Path
 from typing import List, Optional, Union
 
 import numpy as np
+import torch
 from gluonts.dataset.arrow import ArrowWriter
 
 
@@ -19,9 +21,7 @@ def convert_to_arrow(
 
     assert len(time_series) == len(start_times)
 
-    dataset = [
-        {"start": start, "target": ts} for ts, start in zip(time_series, start_times)
-    ]
+    dataset = [{"start": start, "target": ts} for ts, start in zip(time_series, start_times)]
     ArrowWriter(compression=compression).write_to_file(
         dataset,
         path=path,
@@ -33,6 +33,22 @@ def yaml_loader(file_path: str) -> dict:
         conf = yaml.safe_load(file)
 
     return conf
+
+
+class DevDataset(torch.utils.data.Dataset):
+    def __init__(self, data: torch.Tensor, target: torch.Tensor):
+        self.data = data
+        self.target = target
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+        item['labels'] = torch.tensor(self.labels[idx])
+
+        return self.data[idx], self.target[idx]
+
 
 if __name__ == "__main__":
     # Generate 20 random time series of length 1024

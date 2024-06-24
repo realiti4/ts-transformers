@@ -1091,8 +1091,8 @@ def predict(
         # Concatentate next tokens
         input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
 
-        model_inputs['decoder_input_ids'] = next_tokens[:, None]
-        model_inputs['past_key_values'] = outputs['past_key_values']
+        model_inputs["decoder_input_ids"] = next_tokens[:, None]
+        model_inputs["past_key_values"] = outputs["past_key_values"]
 
     preds = input_ids
 
@@ -1145,36 +1145,19 @@ def main() -> None:
     forecast_index = range(len(context), len(context) + prediction_length)
     low, median, high = np.quantile(forecast[0].numpy(), [0.1, 0.5, 0.9], axis=0)
 
-    # # Other methods
-    # tokens, attention_mask, scale = tokenizer.context_input_transform(context.unsqueeze(0))
+    print("Dev predictions", forecast[:, 0, :])
 
-    # # Prediction
-    # model.eval()
-    # result = model(
-    #     input_ids=tokens.to(device),
-    #     decoder_input_ids=torch.zeros([1, 1], dtype=torch.long).to(device),
-    #     # attention_mask=attention_mask.to(device),
-    #     # return_dict = False
-    # )
+    plt.figure(figsize=(8, 4))
+    plt.plot(context.numpy(), color="royalblue", label="historical data")
+    plt.plot(forecast_index, median, color="tomato", label="median forecast")
+    plt.fill_between(forecast_index, low, high, color="tomato", alpha=0.3, label="80% prediction interval")
 
-    # # other
-    # from chronos import ChronosPipeline
+    if real_target is not None:
+        plt.plot(forecast_index, real_target, color="orange", label="real target")
 
-    # pipeline = ChronosPipeline.from_pretrained(
-    #     "amazon/chronos-t5-tiny",
-    #     device_map="cuda",  # use "cpu" for CPU inference and "mps" for Apple Silicon
-    #     torch_dtype=torch.bfloat16,
-    # )
-
-    # model2 = pipeline.model.model
-    # model2.eval()
-    # result2 = model2(
-    #     input_ids=tokens.to(device),
-    #     decoder_input_ids=torch.zeros([1, 1], dtype=torch.long).to(device),
-    #     # return_dict = False
-    # )
-
-    # print(model)
+    plt.legend()
+    plt.grid()
+    plt.show()
 
 
 if __name__ == "__main__":

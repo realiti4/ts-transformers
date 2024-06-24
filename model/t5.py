@@ -17,12 +17,9 @@ from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPastAndCrossAttentions,
     Seq2SeqLMOutput,
-    Seq2SeqModelOutput,
-    Seq2SeqQuestionAnsweringModelOutput,
-    Seq2SeqSequenceClassifierOutput,
-    TokenClassifierOutput,
 )
 from typing import List, Optional, Tuple, Union
+from matplotlib import pyplot as plt
 
 transformers.set_seed(1337)
 
@@ -56,8 +53,7 @@ class ChronosConfig:
     use_cache: bool = True
     use_return_dict: bool = True
     output_attentions: bool = False
-
-    output_hidden_states: bool = False      # check this
+    output_hidden_states: bool = False
     tie_word_embeddings: bool = True
 
     # Tokenizer
@@ -67,7 +63,7 @@ class ChronosConfig:
     eos_token_id = 1
     context_length = 512
     use_eos_token = True
-    model_type = 'seq2seq'
+    model_type = "seq2seq"
 
 
 class T5LayerNorm(nn.Module):
@@ -536,7 +532,8 @@ class Stack(nn.Module):
         super().__init__()
 
         self.config = config
-        self.dtype = torch.bfloat16      # fix this later
+        # self.dtype = torch.bfloat16  # fix this later
+        self.dtype = torch.float32  # fix this later
 
         self.embed_tokens = embed_tokens
         self.is_decoder = config.is_decoder
@@ -573,9 +570,13 @@ class Stack(nn.Module):
             head_mask = [None] * num_hidden_layers
 
         return head_mask
-    
+
     def get_extended_attention_mask(
-        self, attention_mask: torch.Tensor, input_shape: Tuple[int], device: torch.device = None, dtype: torch.float = None
+        self,
+        attention_mask: torch.Tensor,
+        input_shape: Tuple[int],
+        device: torch.device = None,
+        dtype: torch.float = None,
     ) -> torch.Tensor:
         """
         Makes broadcastable attention and causal masks so that future and masked tokens are ignored.
@@ -595,9 +596,7 @@ class Stack(nn.Module):
         if not (attention_mask.dim() == 2 and self.config.is_decoder):
             # show warning only if it won't be shown in `create_extended_attention_mask_for_decoder`
             if device is not None:
-                print(
-                    "The `device` argument is deprecated and will be removed in v5 of Transformers.", FutureWarning
-                )
+                print("The `device` argument is deprecated and will be removed in v5 of Transformers.", FutureWarning)
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
         if attention_mask.dim() == 3:
@@ -625,7 +624,7 @@ class Stack(nn.Module):
         extended_attention_mask = extended_attention_mask.to(dtype=self.dtype)  # fp16 compatibility
         extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(dtype).min
         return extended_attention_mask
-    
+
     def invert_attention_mask(self, encoder_attention_mask: torch.Tensor) -> torch.Tensor:
         """
         Invert an attention mask (e.g., switches 0. and 1.).
@@ -649,7 +648,7 @@ class Stack(nn.Module):
         encoder_extended_attention_mask = (1.0 - encoder_extended_attention_mask) * torch.finfo(self.dtype).min
 
         return encoder_extended_attention_mask
-    
+
     def forward(
         self,
         input_ids=None,
@@ -717,9 +716,7 @@ class Stack(nn.Module):
             encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.size()
             encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
             if encoder_attention_mask is None:
-                encoder_attention_mask = torch.ones(
-                    encoder_hidden_shape, device=inputs_embeds.device, dtype=torch.long
-                )
+                encoder_attention_mask = torch.ones(encoder_hidden_shape, device=inputs_embeds.device, dtype=torch.long)
             encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
         else:
             encoder_extended_attention_mask = None
@@ -871,7 +868,7 @@ class T5Model(nn.Module):
                 sd[k].copy_(sd_hf[k])
 
         return model
-    
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -1006,12 +1003,122 @@ class T5Model(nn.Module):
         )
 
 
+def predict(
+    context: torch.Tensor, model: T5Model, tokenizer: MeanScaleUniformBins, config: ChronosConfig, device
+) -> None:
+    model.eval()
+    prediction_length = 64
+    model_type = "seq2seq"
+
+    # Prepare input_ids for decoder
+    context = context.unsqueeze(0)
+
+    n_samples = 20
+    decoder_input_ids = torch.tensor([config.pad_token_id], device=device).repeat(n_samples, 1)
+
+    batch_size = decoder_input_ids.shape[0]
+    unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=decoder_input_ids.device)
+
+    # Tokenizer
+    tokens, attention_mask, scale = tokenizer.context_input_transform(context)
+
+    encoder_outputs = model.encoder(
+        input_ids=tokens.repeat(n_samples, 1).to(device),
+        attention_mask=attention_mask.to(device),
+    )
+
+    model_inputs = {
+        "decoder_input_ids": decoder_input_ids,
+        "past_key_values": None,
+        "encoder_outputs": encoder_outputs,
+        "attention_mask": attention_mask.repeat(n_samples, 1).to(device),
+        "head_mask": None,
+        "decoder_head_mask": None,
+        "decoder_attention_mask": None,
+        "cross_attn_head_mask": None,
+        "use_cache": True,
+    }
+
+    input_ids = decoder_input_ids
+
+    for i in range(prediction_length):
+        # Prediction
+        outputs = model(
+            **model_inputs,
+            return_dict=True,
+            output_attentions=False,
+            output_hidden_states=False,
+        )
+
+        # Clone is needed to avoid keeping a hanging ref to outputs.logits which may be very large for first iteration
+        # (the clone itself is always small)
+        next_token_logits = outputs.logits[:, -1, :].clone()
+
+        # Logits processor
+        scores = next_token_logits
+
+        min_length = prediction_length + 1  # 65
+        eos_token_id = config.eos_token_id
+
+        vocab_tensor = torch.arange(scores.shape[-1], device=scores.device)
+        eos_token_mask = torch.isin(vocab_tensor, eos_token_id)
+        scores_processed = scores.clone()
+        if input_ids.shape[-1] < min_length:
+            scores_processed = torch.where(eos_token_mask, -math.inf, scores)  # we should enter here check here
+
+        scores = scores_processed
+
+        # Logits wrapper
+        top_k = 50
+        filter_value = -float("inf")
+
+        top_k = min(top_k, scores.size(-1))  # Safety check
+        # Remove all tokens with a probability less than the last token of the top-k
+        indices_to_remove = scores < torch.topk(scores, top_k)[0][..., -1, None]
+        scores = scores.masked_fill(indices_to_remove, filter_value)
+
+        next_token_scores = scores
+
+        # token selection
+        probs = nn.functional.softmax(next_token_scores, dim=-1)
+        next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
+
+        # finished sentences should have their next token be a padding token
+        has_eos_stopping_criteria = True
+        if has_eos_stopping_criteria:
+            next_tokens = next_tokens * unfinished_sequences + config.pad_token_id * (1 - unfinished_sequences)
+
+        # Concatentate next tokens
+        input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
+
+        model_inputs['decoder_input_ids'] = next_tokens[:, None]
+        model_inputs['past_key_values'] = outputs['past_key_values']
+
+    preds = input_ids
+
+    # After geting the result array of [20, 65], we remove start token and continue
+    if model_type == "seq2seq":
+        preds = preds[..., 1:]  # remove the decoder start token
+    else:
+        assert model_type == "causal"
+        assert preds.size(-1) == context.size(-1) + prediction_length
+        preds = preds[..., -prediction_length:]
+
+    preds = preds.reshape(context.size(0), n_samples, -1)
+
+    prediction = tokenizer.output_transform(preds.to(scale.device), scale)
+
+    return prediction
+
+
 def main() -> None:
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     model = "amazon/chronos-t5-tiny"
     config = ChronosConfig()
 
     model = T5Model.from_pretrained(model)
-    model.to('cuda')
+    model.to(device)
 
     model_size = sum(p.numel() for p in model.parameters()) / 1_000_000
     print(f"model size {model_size:.2f} M")
@@ -1021,6 +1128,7 @@ def main() -> None:
 
     window_index = 87000
     context_length = 512
+    prediction_length = 64
 
     raw_data = df["close"].to_numpy()
     real_target = raw_data[window_index + context_length : window_index + context_length + config.d_kv]
@@ -1029,34 +1137,44 @@ def main() -> None:
     # Tokenizer
     tokenizer = MeanScaleUniformBins(low_limit=-15, high_limit=15, config=config)
 
-    tokens, attention_mask, scale = tokenizer.context_input_transform(context.unsqueeze(0))
+    # Try new method here
+    with torch.no_grad():
+        forecast = predict(context=context, model=model, tokenizer=tokenizer, config=config, device=device)
 
-    # Prediction
-    model.eval()
-    result = model(
-        input_ids = tokens.to('cuda'),
-        decoder_input_ids = torch.zeros([1, 1], dtype=torch.long).to('cuda'),
-        # return_dict = False
-    )
+    # Printing
+    forecast_index = range(len(context), len(context) + prediction_length)
+    low, median, high = np.quantile(forecast[0].numpy(), [0.1, 0.5, 0.9], axis=0)
 
-    # other
-    from chronos import ChronosPipeline
+    # # Other methods
+    # tokens, attention_mask, scale = tokenizer.context_input_transform(context.unsqueeze(0))
 
-    pipeline = ChronosPipeline.from_pretrained(
-        "amazon/chronos-t5-tiny",
-        device_map="cuda",  # use "cpu" for CPU inference and "mps" for Apple Silicon
-        # torch_dtype=torch.bfloat16,
-    )
+    # # Prediction
+    # model.eval()
+    # result = model(
+    #     input_ids=tokens.to(device),
+    #     decoder_input_ids=torch.zeros([1, 1], dtype=torch.long).to(device),
+    #     # attention_mask=attention_mask.to(device),
+    #     # return_dict = False
+    # )
 
-    model2 = pipeline.model.model
-    model2.eval()
-    result2 = model2(
-        input_ids = tokens.to('cuda'),
-        decoder_input_ids = torch.zeros([1, 1], dtype=torch.long).to('cuda'),
-        # return_dict = False
-    )
+    # # other
+    # from chronos import ChronosPipeline
 
-    print(model)
+    # pipeline = ChronosPipeline.from_pretrained(
+    #     "amazon/chronos-t5-tiny",
+    #     device_map="cuda",  # use "cpu" for CPU inference and "mps" for Apple Silicon
+    #     torch_dtype=torch.bfloat16,
+    # )
+
+    # model2 = pipeline.model.model
+    # model2.eval()
+    # result2 = model2(
+    #     input_ids=tokens.to(device),
+    #     decoder_input_ids=torch.zeros([1, 1], dtype=torch.long).to(device),
+    #     # return_dict = False
+    # )
+
+    # print(model)
 
 
 if __name__ == "__main__":

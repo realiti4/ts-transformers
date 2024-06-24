@@ -1,3 +1,6 @@
 [submodule "third_party/gluonts"]
 	path = third_party/gluonts
 	url = git@github.com:awslabs/gluonts.git
+[submodule "third_party/transformers"]
+	path = third_party/transformers
+	url = git@github.com:huggingface/transformers.git

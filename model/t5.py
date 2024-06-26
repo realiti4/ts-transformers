@@ -10,7 +10,7 @@ import transformers
 
 from dataclasses import dataclass
 
-from chronos import MeanScaleUniformBins
+from .chronos import MeanScaleUniformBins
 
 from transformers.modeling_utils import ModuleUtilsMixin
 from transformers.modeling_outputs import (
@@ -37,6 +37,7 @@ class ChronosConfig:
 
     d_ff: int = 1024
     d_kv: int = 64
+    prediction_length: int = 64
     decoder_start_token_id: int = 0
     dense_act_fn: str = "relu"
     eos_token_id: int = 1
@@ -829,6 +830,28 @@ class T5Model(nn.Module):
 
         # Initialize weights and apply final processing
         # self.post_init()
+
+    def _shift_right(self, input_ids):
+        decoder_start_token_id = self.config.decoder_start_token_id
+        pad_token_id = self.config.pad_token_id
+
+        if decoder_start_token_id is None:
+            raise ValueError(
+                "self.model.config.decoder_start_token_id has to be defined. In T5 it is usually set to the pad_token_id. "
+                "See T5 docs for more information."
+            )
+
+        # shift inputs to the right
+        shifted_input_ids = input_ids.new_zeros(input_ids.shape)
+        shifted_input_ids[..., 1:] = input_ids[..., :-1].clone()
+        shifted_input_ids[..., 0] = decoder_start_token_id
+
+        if pad_token_id is None:
+            raise ValueError("self.model.config.pad_token_id has to be defined.")
+        # replace possible -100 values in labels by `pad_token_id`
+        shifted_input_ids.masked_fill_(shifted_input_ids == -100, pad_token_id)
+
+        return shifted_input_ids
 
     @classmethod
     def from_pretrained(cls, model_type):

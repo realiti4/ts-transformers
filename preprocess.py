@@ -96,6 +96,8 @@ def make_dataset(
                 if sliding_windows:
                     # train = sliding_window_view(train, window_size)
                     train = make_windows(train, window_size, shuffle=False)
+                else:
+                    train = [train]
 
                 train_dataset.extend(train)
 

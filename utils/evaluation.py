@@ -115,7 +115,8 @@ def trend_analysis_with_volatility(data: np.ndarray, lower_bound: float, upper_b
         ema = calculate_ema(data, period=5)
         recent_avg = ema[-1]
 
-        print("Oldest avg: ", oldest_avg, " Recent avg: ", recent_avg, " Overall avg: ", overall_avg)
+        # # Convert this to logger
+        # print("Oldest avg: ", oldest_avg, " Recent avg: ", recent_avg, " Overall avg: ", overall_avg)
 
         # Determine trend based on both linear regression and moving average
         if slope > 0 and recent_avg > upper_bound:

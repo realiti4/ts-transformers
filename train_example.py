@@ -1,3 +1,6 @@
+# Training example from Chronos repo for reference
+# Check trainer.py for main implementation
+#
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 

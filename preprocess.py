@@ -108,6 +108,8 @@ def make_dataset(
                     if sliding_windows:
                         # eval = sliding_window_view(eval, window_size)
                         eval = make_windows(eval, window_size, shuffle=False)
+                    else:
+                        eval = [eval]
 
                     eval_dataset.extend(eval)
 

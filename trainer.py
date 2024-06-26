@@ -168,10 +168,11 @@ def train(
         for micro_step in range(grad_accum_steps):
             inputs = next(train_loader)
 
-            inputs['input_ids'], inputs['attention_mask'], inputs['labels'] = inputs['input_ids'].to(device), inputs['attention_mask'].to(device), inputs['labels'].to(device)
-
-            # x, y = train_loader.next_batch()
-            # x, y = x.to(device), y.to(device)
+            inputs["input_ids"], inputs["attention_mask"], inputs["labels"] = (
+                inputs["input_ids"].to(device),
+                inputs["attention_mask"].to(device),
+                inputs["labels"].to(device),
+            )
 
             with torch.autocast(device_type=device, dtype=torch.bfloat16):
                 output = model(**inputs)
@@ -197,7 +198,7 @@ def train(
 
         t1 = time.time()
         dt = t1 - t0  # time difference in seconds
-        tokens_processed = inputs['input_ids'].size(0) * inputs['input_ids'].size(1) * grad_accum_steps * ddp_world_size
+        tokens_processed = inputs["input_ids"].size(0) * inputs["input_ids"].size(1) * grad_accum_steps * ddp_world_size
         tokens_per_sec = tokens_processed / dt
 
         if master_process:

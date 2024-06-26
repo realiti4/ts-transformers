@@ -1025,6 +1025,118 @@ class T5Model(nn.Module):
             encoder_attentions=encoder_outputs.attentions,
         )
 
+    def predict(
+        self,
+        context: torch.Tensor,
+        tokenizer: MeanScaleUniformBins,
+        device: str,
+        n_samples: int = 20,
+        model_type: str = "seq2seq",
+    ) -> None:
+        self.eval()
+
+        # Prepare input_ids for decoder
+        context = context.unsqueeze(0)
+
+        decoder_input_ids = torch.tensor([self.config.pad_token_id], device=device).repeat(n_samples, 1)
+
+        batch_size = decoder_input_ids.shape[0]
+        unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=decoder_input_ids.device)
+
+        # Tokenizer
+        tokens, attention_mask, scale = tokenizer.context_input_transform(context)
+
+        # Encoder outputs
+        with torch.no_grad():
+            encoder_outputs = self.encoder(
+                input_ids=tokens.repeat(n_samples, 1).to(device),
+                attention_mask=attention_mask.to(device),
+            )
+
+        model_inputs = {
+            "decoder_input_ids": decoder_input_ids,
+            "past_key_values": None,
+            "encoder_outputs": encoder_outputs,
+            "attention_mask": attention_mask.repeat(n_samples, 1).to(device),
+            "head_mask": None,
+            "decoder_head_mask": None,
+            "decoder_attention_mask": None,
+            "cross_attn_head_mask": None,
+            "use_cache": True,
+        }
+
+        input_ids = decoder_input_ids
+
+        for i in range(self.config.prediction_length):
+            # Prediction
+            with torch.no_grad():
+                outputs = self(
+                    **model_inputs,
+                    return_dict=True,
+                    output_attentions=False,
+                    output_hidden_states=False,
+                )
+
+            # Clone is needed to avoid keeping a hanging ref to outputs.logits which may be very large for first iteration
+            # (the clone itself is always small)
+            next_token_logits = outputs.logits[:, -1, :].clone()
+
+            # Logits processor
+            scores = next_token_logits
+
+            min_length = self.config.prediction_length + 1  # 65
+            eos_token_id = self.config.eos_token_id
+
+            vocab_tensor = torch.arange(scores.shape[-1], device=scores.device)
+            eos_token_mask = torch.isin(vocab_tensor, eos_token_id)
+            scores_processed = scores.clone()
+            if input_ids.shape[-1] < min_length:
+                scores_processed = torch.where(eos_token_mask, -math.inf, scores)  # we should enter here check here
+
+            scores = scores_processed
+
+            # Logits wrapper
+            top_k = 50
+            filter_value = -float("inf")
+
+            top_k = min(top_k, scores.size(-1))  # Safety check
+            # Remove all tokens with a probability less than the last token of the top-k
+            indices_to_remove = scores < torch.topk(scores, top_k)[0][..., -1, None]
+            scores = scores.masked_fill(indices_to_remove, filter_value)
+
+            next_token_scores = scores
+
+            # token selection
+            probs = nn.functional.softmax(next_token_scores, dim=-1)
+            next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
+
+            # finished sentences should have their next token be a padding token
+            has_eos_stopping_criteria = True
+            if has_eos_stopping_criteria:
+                next_tokens = next_tokens * unfinished_sequences + self.config.pad_token_id * (1 - unfinished_sequences)
+
+            # Concatentate next tokens
+            input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
+
+            model_inputs["decoder_input_ids"] = next_tokens[:, None]
+            model_inputs["past_key_values"] = outputs["past_key_values"]
+
+        preds = input_ids
+
+        # After geting the result array of [20, 65], we remove start token and continue
+        if model_type == "seq2seq":
+            preds = preds[..., 1:]  # remove the decoder start token
+        else:
+            assert model_type == "causal"
+            assert preds.size(-1) == context.size(-1) + self.config.prediction_length
+            preds = preds[..., -self.config.prediction_length :]
+
+        preds = preds.reshape(context.size(0), n_samples, -1)
+
+        prediction = tokenizer.output_transform(preds.to(scale.device), scale)
+
+        return prediction
+
 
 def predict(
     context: torch.Tensor, model: T5Model, tokenizer: MeanScaleUniformBins, config: ChronosConfig, device

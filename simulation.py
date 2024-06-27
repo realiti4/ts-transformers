@@ -2,6 +2,7 @@ import torch
 import pandas as pd
 import numpy as np
 import transformers
+from tqdm import tqdm
 
 from model.chronos import MeanScaleUniformBins
 from model.t5 import T5Model, ChronosConfig
@@ -12,10 +13,11 @@ transformers.set_seed(1337)
 
 def run_simulation(model: T5Model, config: ChronosConfig) -> None:
     # TODO do this with batches
-    # TODO use tqdm
 
     device = "cuda"
     model.to(device)
+    model = torch.compile(model)
+    n_samples = 20
 
     # Simulation pot size
     pot_size = 100
@@ -29,13 +31,23 @@ def run_simulation(model: T5Model, config: ChronosConfig) -> None:
     # Get first eval dataset, bitcoint in this case
     evals = df.iloc[0]["target"]
 
-    for i in range(0, len(evals) - config.context_length - config.prediction_length):
+    # Dev batch
+    batch = []
+
+    # Run simulation
+    print("Running simulation..")
+    print(f"Pot size: {pot_size}, n_samples: {n_samples}, total points: {len(evals)}")
+
+    for i in tqdm(range(0, len(evals) - config.context_length - config.prediction_length, 10)):
         # Get the context window
         context = evals[i : i + config.context_length]
         target = evals[i + config.context_length : i + config.context_length + config.prediction_length]
 
+        # DEV - batches
+        # batch.append(context)
+
         # Get the prediction
-        forecast = model.predict(torch.tensor(context), tokenizer, device)
+        forecast = model.predict(torch.tensor(context), tokenizer, device, n_samples)
 
         low, median, high = np.quantile(forecast[0].numpy(), [0.1, 0.5, 0.9], axis=0)
 
@@ -62,8 +74,8 @@ if __name__ == "__main__":
     model = "amazon/chronos-t5-tiny"
     config = ChronosConfig()
 
-    # model = T5Model.from_pretrained(model)
-    model = T5Model(config)
+    model = T5Model.from_pretrained(model)
+    # model = T5Model(config)
 
     run_simulation(model, config)
     print("Done")
